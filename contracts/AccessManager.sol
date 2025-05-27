@@ -19,7 +19,6 @@ import "./ReleasableToken.sol";
 /// @dev Implements role-based access control for token and tokenomics operations
 contract AccessManager is
     Initializable,
-    PausableUpgradeable,
     Ownable2StepUpgradeable,
     UUPSUpgradeable,
     AccessManagerUpgradeable,
@@ -30,8 +29,6 @@ contract AccessManager is
     /// @notice The token contract being managed
     ReleasableToken public token;
 
-    /// @notice Role ID for administrative users
-    uint64 public constant ADMIN_USER = 0;
     /// @notice Role ID for tokenomics maintainers
     uint64 public constant TOKENOMICS_MAINTAINER = 1;
     /// @notice Role ID for tokenomics runners
@@ -49,7 +46,6 @@ contract AccessManager is
         address tokenomics_,
         address token_
     ) public initializer {
-        __Pausable_init();
         __Ownable_init(msg.sender);
         __UUPSUpgradeable_init();
         __AccessManager_init(msg.sender);
@@ -58,8 +54,7 @@ contract AccessManager is
         tokenomics = Tokenomics(tokenomics_);
         token = ReleasableToken(token_);
 
-        grantRole(ADMIN_USER, msg.sender, 0);
-        grantRole(ADMIN_USER, address(this), 0);
+        grantRole(ADMIN_ROLE, address(this), 0);
     }
 
     /// @notice Sets roles for specific function selectors on a target contract
@@ -81,7 +76,7 @@ contract AccessManager is
         _setTargetFunctionRole(address(tokenomics), tokenomics.setTokenReleaseGroupReceiverAddress.selector, TOKENOMICS_MAINTAINER);
         _setTargetFunctionRole(address(tokenomics), tokenomics.hasUpgradePermission.selector, TOKENOMICS_MAINTAINER);
         
-        _setTargetFunctionRole(address(tokenomics), token.hasUpgradePermission.selector, TOKENOMICS_MAINTAINER);
+        _setTargetFunctionRole(address(token), token.initialize.selector, ADMIN_ROLE);
         
         grantRole(TOKENOMICS_MAINTAINER, msg.sender, 0);
         grantRole(TOKENOMICS_RUNNER, msg.sender, 0);
@@ -91,16 +86,6 @@ contract AccessManager is
     /// @return The version number
     function version() external pure returns (uint256) {
         return 1;
-    }
-
-    /// @notice Pauses the contract
-    function pause() external restricted {
-        _pause();
-    }
-
-    /// @notice Unpauses the contract
-    function unpause() external restricted {
-        _unpause();
     }
 
     /// @notice Checks if the caller has permission to upgrade the contract

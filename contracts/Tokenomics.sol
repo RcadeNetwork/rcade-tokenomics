@@ -24,8 +24,6 @@ contract Tokenomics is Initializable, PausableUpgradeable, UUPSUpgradeable, Acce
     IERC20Metadata public token;
     /// @notice The timestamp when the token generation event (TGE) occurred
     uint256 public tgeTime;
-    /// @notice The total supply of tokens
-    uint256 public totalSupply;
 
     /// @notice Structure representing a group of tokens with specific release parameters
     /// @param id Unique identifier for the release group
@@ -52,6 +50,9 @@ contract Tokenomics is Initializable, PausableUpgradeable, UUPSUpgradeable, Acce
     /// @notice Counter for generating unique release group IDs
     uint256 private nonce;
 
+    event TokensReleased(bytes32 indexed id, uint256 amount, address indexed receiver);
+    event TGETimeSet(uint256 time);
+
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
@@ -59,8 +60,7 @@ contract Tokenomics is Initializable, PausableUpgradeable, UUPSUpgradeable, Acce
 
     /// @notice Initializes the tokenomics contract
     /// @param token_ The address of the token contract
-    /// @param totalSupply_ The total supply of tokens
-    function initialize(address token_, uint256 totalSupply_) public initializer {
+    function initialize(address token_) public initializer {
         __Pausable_init();
         __UUPSUpgradeable_init();
         __AccessManaged_init(msg.sender);
@@ -71,15 +71,12 @@ contract Tokenomics is Initializable, PausableUpgradeable, UUPSUpgradeable, Acce
         require(token_ != address(0), "invalid token address");
         token = IERC20Metadata(token_);
 
-        totalSupply = totalSupply_;
-        require(totalSupply > 0, "invalid token total supply");
-
         // create different release groups
         _initializeGroups();
     }
 
     /// @notice Transfers unlocked tokens for all release groups
-    function transferUnlockedTokens() external restricted {
+    function transferUnlockedTokens() external restricted whenNotPaused{
         for (uint256 i = 0; i < tokenReleaseGroupIDs.length(); ++i) {
             transferUnlockedTokensForReleaseGroup(tokenReleaseGroupIDs.at(i));
         }
@@ -104,7 +101,7 @@ contract Tokenomics is Initializable, PausableUpgradeable, UUPSUpgradeable, Acce
 
     /// @notice Transfers unlocked tokens for a specific release group
     /// @param id The ID of the release group
-    function transferUnlockedTokensForReleaseGroup(bytes32 id) public restricted {
+    function transferUnlockedTokensForReleaseGroup(bytes32 id) public restricted whenNotPaused {
         TokenReleaseGroup storage group = tokenReleaseGroupsByID[id];
 
         uint256 remainingLockedTokens = _getRemainingTokensForGroup(id);
@@ -112,9 +109,12 @@ contract Tokenomics is Initializable, PausableUpgradeable, UUPSUpgradeable, Acce
         uint256 tokensToRelease = group.lockedTokens - remainingLockedTokens;
         group.lockedTokens = remainingLockedTokens;
 
-        if (tokensToRelease > 0 && group.receiver != address(0)) {
+        require(group.receiver != address(0), "receiver address is not set");
+        if (tokensToRelease > 0) {
             token.safeTransfer(group.receiver, tokensToRelease);
         }
+
+        emit TokensReleased(id, tokensToRelease, group.receiver);
     }
 
     /// @notice Generates a new unique ID for a token release group
@@ -172,6 +172,7 @@ contract Tokenomics is Initializable, PausableUpgradeable, UUPSUpgradeable, Acce
     /// @param time The timestamp of the TGE
     function setTGETime(uint256 time) external restricted {
         tgeTime = time;
+        emit TGETimeSet(time);
     }
 
     /// @notice Sets the receiver address for a token release group
