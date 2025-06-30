@@ -20,6 +20,9 @@ contract Tokenomics is Initializable, PausableUpgradeable, UUPSUpgradeable, Acce
     using EnumerableSet for EnumerableSet.Bytes32Set;
     using SafeERC20 for IERC20Metadata;
 
+    /// @notice Max supply of tokens that can be delegated to release groups
+    uint256 public constant MAX_SUPPLY = 40_000_000_000 * 10 ** 18;
+
     /// @notice The token contract being managed
     IERC20Metadata public token;
     /// @notice The timestamp when the token generation event (TGE) occurred
@@ -29,6 +32,7 @@ contract Tokenomics is Initializable, PausableUpgradeable, UUPSUpgradeable, Acce
     /// @param id Unique identifier for the release group
     /// @param title Human-readable name for the release group
     /// @param initialLockedTokens Amount of tokens initially locked
+    /// @param initialUnlockedTokens Amount of tokens initially unlocked
     /// @param cliffDays Number of days before tokens start vesting
     /// @param vestingDays Number of days over which tokens vest
     /// @param lockedTokens Current amount of tokens still locked
@@ -37,6 +41,7 @@ contract Tokenomics is Initializable, PausableUpgradeable, UUPSUpgradeable, Acce
         bytes32 id;
         string title;
         uint256 initialLockedTokens;
+        uint256 initialUnlockedTokens;
         uint256 cliffDays;
         uint256 vestingDays;
         uint256 lockedTokens;
@@ -49,6 +54,10 @@ contract Tokenomics is Initializable, PausableUpgradeable, UUPSUpgradeable, Acce
     EnumerableSet.Bytes32Set private tokenReleaseGroupIDs;
     /// @notice Counter for generating unique release group IDs
     uint256 private nonce;
+    /// @notice Mapping of release group IDs to the bool indicating if the initial unlocked tokens have been transferred
+    mapping(bytes32 => bool) public initialTokensReleased;
+    /// @notice Current total delegated tokens
+    uint256 private currentSupply;
 
     event TokensReleased(bytes32 indexed id, uint256 amount, address indexed receiver);
     event TGETimeSet(uint256 time);
@@ -70,33 +79,13 @@ contract Tokenomics is Initializable, PausableUpgradeable, UUPSUpgradeable, Acce
         // make sure that the token looks sane
         require(token_ != address(0), "invalid token address");
         token = IERC20Metadata(token_);
-
-        // create different release groups
-        _initializeGroups();
     }
 
     /// @notice Transfers unlocked tokens for all release groups
-    function transferUnlockedTokens() external restricted whenNotPaused{
+    function transferUnlockedTokens() external restricted whenNotPaused {
         for (uint256 i = 0; i < tokenReleaseGroupIDs.length(); ++i) {
             transferUnlockedTokensForReleaseGroup(tokenReleaseGroupIDs.at(i));
         }
-    }
-
-    /// @notice Initializes predefined token release groups
-    function _initializeGroups() internal {
-        uint256 decimals = token.decimals();
-        _addTokenReleaseGroup("Scout Nodes - Earning", 13147832000 * (10 ** decimals), 90, 1095, address(0));
-        _addTokenReleaseGroup("Scout Nodes - NFT Staking", 6480000000 * (10 ** decimals), 90, 1095, address(0));
-        _addTokenReleaseGroup("Scout Nodes - Seedify Airdrop", 372168000 * (10 ** decimals), 0, 0, address(0));
-        _addTokenReleaseGroup("NFT airdrop - Staking rewards", 760000000 * (10 ** decimals), 0, 0, address(0));
-        _addTokenReleaseGroup("NFT airdrop - at tge based on snapshot", 760000000 * (10 ** decimals), 0, 0, address(0));
-        _addTokenReleaseGroup("Farmers, Byte streak, Chests, Early Rewards", 880000000 * (10 ** decimals), 0, 0, address(0));
-        _addTokenReleaseGroup("Future airdrops", 2400000000 * (10 ** decimals), 0, 0, address(0));
-        _addTokenReleaseGroup("Liquidity", 800000000 * (10 ** decimals), 0, 0, address(0));
-        _addTokenReleaseGroup("Ecosystem Growth", 800000000 * (10 ** decimals), 0, 0, address(0));
-        _addTokenReleaseGroup("Treasury", 1200000000 * (10 ** decimals), 0, 0, address(0));
-        _addTokenReleaseGroup("Advisors and investors", 7272000000 * (10 ** decimals), 0, 0, address(0));
-        _addTokenReleaseGroup("Team", 5128000000 * (10 ** decimals), 0, 0, address(0));
     }
 
     /// @notice Transfers unlocked tokens for a specific release group
@@ -107,6 +96,10 @@ contract Tokenomics is Initializable, PausableUpgradeable, UUPSUpgradeable, Acce
         uint256 remainingLockedTokens = _getRemainingTokensForGroup(id);
         require(group.lockedTokens >= remainingLockedTokens, "less tokens locked than expected");
         uint256 tokensToRelease = group.lockedTokens - remainingLockedTokens;
+        if (!initialTokensReleased[id] && tgeTime > 0 && block.timestamp >= tgeTime) {
+            tokensToRelease += group.initialUnlockedTokens;
+            initialTokensReleased[id] = true;
+        }
         group.lockedTokens = remainingLockedTokens;
 
         require(group.receiver != address(0), "receiver address is not set");
@@ -123,6 +116,19 @@ contract Tokenomics is Initializable, PausableUpgradeable, UUPSUpgradeable, Acce
         return keccak256(abi.encodePacked(block.timestamp, nonce++));
     }
 
+    function batchAddTokenReleaseGroups(
+        string[] memory titles,
+        uint256[] memory initialLockedTokens,
+        uint256[] memory initialUnlockedTokens,
+        uint256[] memory cliffDays,
+        uint256[] memory vestingDays,
+        address[] memory receivers
+    ) external restricted {
+        for (uint256 i = 0; i < titles.length; ++i) {
+            _addTokenReleaseGroup(titles[i], initialLockedTokens[i], initialUnlockedTokens[i], cliffDays[i], vestingDays[i], receivers[i]);
+        }
+    }
+
     /// @notice Adds a new token release group
     /// @param title The name of the release group
     /// @param lockedTokens The amount of tokens to lock
@@ -132,12 +138,24 @@ contract Tokenomics is Initializable, PausableUpgradeable, UUPSUpgradeable, Acce
     function _addTokenReleaseGroup(
         string memory title,
         uint256 lockedTokens,
+        uint256 initialUnlockedTokens,
         uint256 cliffDays,
         uint256 vestingDays,
         address receiver
     ) internal {
+        require(currentSupply + lockedTokens + initialUnlockedTokens <= MAX_SUPPLY, "Token allocations exceed max supply");
+        currentSupply += lockedTokens + initialUnlockedTokens;
         bytes32 id = _newTokenReleaseGroupId();
-        tokenReleaseGroupsByID[id] = TokenReleaseGroup(id, title, lockedTokens, cliffDays, vestingDays, lockedTokens, receiver);
+        tokenReleaseGroupsByID[id] = TokenReleaseGroup(
+            id,
+            title,
+            lockedTokens,
+            initialUnlockedTokens,
+            cliffDays,
+            vestingDays,
+            lockedTokens,
+            receiver
+        );
         tokenReleaseGroupIDs.add(id);
     }
 
@@ -146,6 +164,11 @@ contract Tokenomics is Initializable, PausableUpgradeable, UUPSUpgradeable, Acce
     /// @return The amount of tokens still locked
     function _getRemainingTokensForGroup(bytes32 id) internal view returns (uint256) {
         TokenReleaseGroup storage group = tokenReleaseGroupsByID[id];
+
+        // If TGE hasn't been set or has not been reached, all tokens remain locked
+        if (tgeTime == 0 || block.timestamp < tgeTime) {
+            return group.initialLockedTokens;
+        }
 
         uint256 daysSinceTGE = (block.timestamp - tgeTime) / 60 / 60 / 24;
 
@@ -223,8 +246,19 @@ contract Tokenomics is Initializable, PausableUpgradeable, UUPSUpgradeable, Acce
     function getReleasedTokens(bytes32 groupId) external view returns (uint256) {
         require(tokenReleaseGroupIDs.contains(groupId), "token release group does not exist");
         TokenReleaseGroup storage group = tokenReleaseGroupsByID[groupId];
+        uint256 releasedTokens = group.initialLockedTokens - group.lockedTokens;
+        if (initialTokensReleased[groupId]) {
+            releasedTokens += group.initialUnlockedTokens;
+        }
+        return releasedTokens;
+    }
 
-        return group.initialLockedTokens - group.lockedTokens;
+    /// @notice Returns the amount of tokens initially unlocked for a specific group
+    /// @param groupId The ID of the release group
+    /// @return The amount of tokens initially unlocked
+    function getInitialUnlockedTokens(bytes32 groupId) external view returns (uint256) {
+        require(tokenReleaseGroupIDs.contains(groupId), "token release group does not exist");
+        return tokenReleaseGroupsByID[groupId].initialUnlockedTokens;
     }
 
     /// @notice Returns a paginated list of token release groups
