@@ -70,6 +70,7 @@ contract AccessManager is
         // Tokenomics roles
         _setTargetFunctionRole(address(tokenomics), tokenomics.transferUnlockedTokens.selector, TOKENOMICS_RUNNER);
         _setTargetFunctionRole(address(tokenomics), tokenomics.transferUnlockedTokensForReleaseGroup.selector, TOKENOMICS_RUNNER);
+        _setTargetFunctionRole(address(tokenomics), tokenomics.batchAddTokenReleaseGroups.selector, TOKENOMICS_MAINTAINER);
         _setTargetFunctionRole(address(tokenomics), tokenomics.pause.selector, TOKENOMICS_MAINTAINER);
         _setTargetFunctionRole(address(tokenomics), tokenomics.unpause.selector, TOKENOMICS_MAINTAINER);
         _setTargetFunctionRole(address(tokenomics), tokenomics.setTGETime.selector, TOKENOMICS_MAINTAINER);
